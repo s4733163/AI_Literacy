@@ -4,7 +4,7 @@ A tool that automatically verifies academic references cited in AI-generated con
 
 ## How It Works
 
-![Citation Checker Flow](Citation_Checker_Flow.png)
+![Citation Checker Flow](https://varun-devops-s3-2026.s3.amazonaws.com/Citation_Checker_Flow.png)
 
 The pipeline has two stages:
 
