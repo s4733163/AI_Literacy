@@ -8,6 +8,8 @@ import re
 import requests
 import os
 import json
+from bs4 import BeautifulSoup
+
 
 load_dotenv()
 
@@ -24,6 +26,20 @@ HEADERS = {
 # conventional 80-90 band: high enough to reject a different paper, loose
 # enough to forgive a dropped subtitle or some minor wording differences.
 TITLE_THRESHOLD = 85
+
+# We are finding a doi inside a url if it exists.
+# A DOI looks like 10.<digits>/<something>. This finds one even when it's
+# buried inside a URL, e.g. https://dl.acm.org/doi/10.1145/3706599.3719681
+DOI_PATTERN = re.compile(r"10\.\d{4,9}/[^\s\"'<>]+", re.IGNORECASE)
+
+# Academic publishers embed labelled metadata in the page head. These are the
+# tag names we trust (NOT og:title/twitter:title — those are usually just the
+# site name, which would cause false mismatches).
+_META_TITLE  = ["citation_title", "dc.title"]
+_META_AUTHOR = ["citation_author", "dc.creator"]
+_META_DATE   = ["citation_publication_date", "citation_date", "citation_cover_date",
+                "dc.date", "prism.publicationDate"]
+
 
 # check if the api key exists
 if not os.getenv("GOOGLE_API_KEY"):
@@ -75,17 +91,65 @@ Extract metadata from this reference:
 # chain is invoked with reference to get the metadata of the reference
 chain = prompt | structured_llm
 
+def _meta_by_name(soup, name):
+    """All <meta> content values matching one tag name."""
+    name = name.lower()
+    out = []
+    for tag in soup.find_all("meta"):
+        key = (tag.get("name") or tag.get("property") or "").lower()
+
+        # if the tag matches the specified name
+        if key == name and tag.get("content"):
+            out.append(tag["content"].strip())
+    return out
 
 
+def _first_meta(soup, names):
+    """First value found, trying each name in priority order."""
+    for n in names:
+        vals = _meta_by_name(soup, n)
+        if vals:
+            return vals[0]
+    return None
 
 
-def metadata(reference):
-    """Extracts the metadata using an llm and returns a reference in a specific format."""
-    reference = re.sub(r"\s+", " ", reference).strip()
-    result = chain.invoke({"reference": reference})
-    return(result.model_dump())
+def _all_meta(soup, names):
+    """All values for the first name that has any (e.g. every author tag)."""
+    for n in names:
+        vals = _meta_by_name(soup, n)
+        if vals:
+            return vals
+    return []
 
 
+def _metatags_to_metadata(html):
+    """Build a CSL-JSON-shaped dict from a page's embedded tags, so it can be
+    fed straight into compare_to_metadata. Returns None if the page has no
+    usable academic metadata (e.g. an ordinary blog)."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # check for TITLE
+    # only 1 entry required
+    title = _first_meta(soup, _META_TITLE)
+    if not title:
+        return None
+    
+    # check for AUTHOR
+    authors = _all_meta(soup, _META_AUTHOR)
+
+    # check for DATE
+    date = _first_meta(soup, _META_DATE)
+    year = None
+    if date:
+        m = re.search(r"(\d{4})", date)
+        if m:
+            year = int(m.group(1))
+
+    return {
+        "title": title,
+        "author": [{"family": _surname(a)} for a in authors],
+        "issued": {"date-parts": [[year]]} if year else {},
+    }
  
 def normalize(text: Optional[str]) -> str:
     """Lowercase, drop punctuation, collapse whitespace. Used before comparing."""
@@ -180,16 +244,17 @@ def compare_to_metadata(
  
     if title_matches:
         verdict = "verified"
-        note = "DOI resolves to a record whose title matches the citation."
+        note = "DOI/URL resolves to a record whose title matches the citation."
         if year_match is False:
             note += (f" But the cited year ({claimed_year}) differs from the "
                      f"registry year ({canon_year}) — worth a manual look.")
             
         if not len(overlap) and len(claimed_surnames):
+            verdict = "verified_review"
             note += (f" The author list differs from official metadata.")
     else:
         verdict = "metadata_mismatch"
-        note = (f"DOI is registered, but it resolves to \"{canonical_title}\", "
+        note = (f"DOI/URL is registered, but it resolves to \"{canonical_title}\", "
                 f"which does not match the cited title. Likely fabricated.")
  
     return {
@@ -247,6 +312,100 @@ def verify_doi(
  
     return compare_to_metadata(claimed_title, claimed_authors, claimed_year, metadata, doi)
  
+def extract_doi_from_url(url):
+    """Try to pull a DOI out of a URL. Returns the bare DOI, or None.
+
+    This is the high-value step: many 'no DOI' references actually have one
+    sitting inside the link, which lets us jump back onto the strong DOI path.
+    """
+    if not url:
+        return None
+    
+    # find the DOI in the url if exists
+    match = DOI_PATTERN.search(url)
+    if not match:
+        return None
+    doi = match.group(0)
+
+    # URLs often have trailing junk after the DOI (?query, #fragment, etc.)
+    return doi.split("?")[0].split("#")[0].rstrip(".,)/")
+
+
+def check_url_alive(url):
+    """Weak check: does the link load? True = loads, False = dead,
+    None = couldn't tell. A live link is mild positive evidence; a dead
+    one is a mild warning — neither is proof on its own."""
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True, headers=HEADERS)
+        return resp.status_code < 400
+    except requests.RequestException:
+        return None
+
+
+def verify_url_via_metatags(claimed_title, claimed_authors, claimed_year, url):
+    """Read structured metadata from the page head and compare it like DOI
+    metadata. Returns a verdict dict, or None if the page couldn't be fetched
+    or had no usable tags (caller then falls back to the weak link check)."""
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True, headers=HEADERS)
+    except requests.RequestException:
+        return None
+    
+    # if the status code is not alive
+    # DO THE LAST BRANCH CHECKING HERE AS WELL
+    if resp.status_code >= 400:
+        return None
+
+    # get the metadata out of the text 
+    metadata = _metatags_to_metadata(resp.text)
+    if metadata is None:
+        return None
+
+    # compare the metadata
+    result = compare_to_metadata(claimed_title, claimed_authors, claimed_year, metadata, doi=None)
+
+    # compare_to_metadata's note mentions a "DOI"; reword it, since this
+    # evidence came from the page itself and is weaker than a registry.
+    if result["verdict"] == "verified":
+        result["note"] = ("The page's own embedded metadata matches the citation. "
+                        "Weaker than a DOI check, but supportive.")
+    elif result["verdict"] == "verified_review":
+        result["note"] = ("The page's title matches, but the authors differ from the "
+                        "citation — this may be a different paper. Worth a manual look.")
+    else:
+        result["note"] = (f"The page's embedded title (\"{result['canonical_title']}\") "
+                        f"does not match the cited title. Treat with suspicion.")
+    result["evidence"] = "page meta tags"
+    result["url"] = url
+    return result
+
+def verify_url(claimed_title, claimed_authors, claimed_year, url):
+    # 1. Strongest: a DOI hiding inside the URL -> reuse the DOI check.
+    doi = extract_doi_from_url(url)
+    if doi:
+        return verify_doi(claimed_title, claimed_authors, claimed_year, doi)
+
+    # 2. Decent: structured metadata embedded in the page head.
+    meta_result = verify_url_via_metatags(claimed_title, claimed_authors, claimed_year, url)
+    if meta_result is not None:
+        return meta_result
+
+    # 3. Weak: can we at least tell the link is alive?
+    alive = check_url_alive(url)
+    if alive is True:
+        note = ("No DOI and no embedded metadata. The link loads, but that's weak "
+                "evidence — needs a title/author lookup.")
+    elif alive is False:
+        note = ("No DOI or embedded metadata, and the link does not load. "
+                "Weak warning — needs a title/author lookup.")
+    else:
+        note = "No DOI or embedded metadata, and the link could not be reached."
+    return {
+        "verdict": "url_only",
+        "url": url,
+        "link_alive": alive,
+        "note": note,
+    }
 
 def check_metadata(extracted_data):
     # if the doi and url exists, we choose doi 
@@ -258,10 +417,19 @@ def check_metadata(extracted_data):
             extracted_data.get("doi")
         )
     elif extracted_data.get("url"):
-        return {
-            "verdict": "url_only",
-            "note": "No DOI found. URL verification branch will be added later."
-        }
+        response = verify_url(
+            extracted_data.get("title"), 
+            extracted_data.get("authors"), 
+            extracted_data.get("year"), 
+            extracted_data.get("url")
+        )
+
+        if response.get("verdict") == "url_only":
+            # do the title and year check as well, not just checking alive or dead
+            pass
+
+
+        return response
 
     else:
         return {
@@ -269,3 +437,9 @@ def check_metadata(extracted_data):
             "note": "No DOI or URL found. Use title/author/year reverse lookup later."
         }
     
+
+def metadata(reference):
+    """Extracts the metadata using an llm and returns a reference in a specific format."""
+    reference = re.sub(r"\s+", " ", reference).strip()
+    result = chain.invoke({"reference": reference})
+    return(result.model_dump())
