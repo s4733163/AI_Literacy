@@ -41,6 +41,7 @@ Title similarity is the primary match signal, scored with fuzzy matching (`token
 ├── reference_checking.py   # Core verification logic + CLI entry point
 ├── structured.py           # Pydantic schema for extracted reference fields
 ├── reference.txt           # Sample input — paste any reference here to test
+├── requirements.txt        # Pinned dependencies
 └── test_cases/
     ├── pytest.ini          # Pytest config (marker definitions)
     ├── test_verify_suite.py # Comprehensive test suite
@@ -71,7 +72,7 @@ venv\Scripts\activate
 **3. Install dependencies**
 
 ```bash
-pip install python-dotenv langchain-google-genai langchain-core rapidfuzz requests beautifulsoup4 pydantic pytest
+pip install -r requirements.txt
 ```
 
 **4. Get a Google Gemini API key**
