@@ -40,6 +40,11 @@ _META_AUTHOR = ["citation_author", "dc.creator"]
 _META_DATE   = ["citation_publication_date", "citation_date", "citation_cover_date",
                 "dc.date", "prism.publicationDate"]
 
+# OpenAlex is the no-DOI fallback search. A contact email puts you in its
+# faster, more reliable "polite pool".
+OPENALEX_URL = "https://api.openalex.org/works"
+OPENALEX_MAILTO = "vsvarun@utas.edu.au"
+ 
 
 # check if the api key exists
 if not os.getenv("GOOGLE_API_KEY"):
@@ -285,6 +290,122 @@ def fetch_csl_metadata(doi: str) -> Optional[dict]:
     resp.raise_for_status()
     return resp.json()
  
+
+def _openalex_to_metadata(work):
+    """Reshape ONE OpenAlex result into the CSL-like dict compare_to_metadata
+    expects, so the same comparison logic is reused everywhere."""
+
+    # list of authors
+    authors = []
+    for a in work.get("authorships", []):
+        name = (a.get("author") or {}).get("display_name") or ""
+        if name:
+            authors.append({"family": _surname(name)})
+
+    # publication year
+    year = work.get("publication_year")
+
+    # metadata in the same format, to be used in compare metadata
+    return {
+        "title": work.get("display_name") or "",
+        "author": authors,
+        "issued": {"date-parts": [[year]]} if year else {},
+    }
+
+def reverse_lookup(claimed_title, claimed_authors, claimed_year, max_candidates=5):
+    """Last resort: no DOI and no usable page metadata.
+ 
+    Search OpenAlex by title, then use title + author + year TOGETHER to pick
+    which result is really the cited paper (not just the top-ranked one). If
+    the chosen paper has a DOI, confirm it the strong way. Otherwise judge on
+    the combined match, STRICTLY: a title-only match is NOT enough here, because
+    we searched by title and could be looking at a same-titled lookalike.
+ 
+    Never returns 'fake' — only verified / verified_review / unverifiable."""
+    claimed_authors = claimed_authors or []
+ 
+    if not claimed_title:
+        return {"verdict": "unverifiable",
+                "note": "No title available to search with — cannot look this up."}
+ 
+    # 1. Search OpenAlex by title.
+    try:
+        resp = requests.get(
+            OPENALEX_URL,
+            params={"search": claimed_title,
+                    "per-page": max_candidates,
+                    "mailto": OPENALEX_MAILTO},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        # main results we are interested in
+        results = resp.json().get("results", [])
+
+    except requests.RequestException as exc:
+        return {"verdict": "lookup_error",
+                "note": f"Could not reach OpenAlex: {exc}. Try again later."}
+ 
+    if not results:
+        return {"verdict": "unverifiable",
+                "note": ("No matching work found in OpenAlex. This may be a book, an "
+                         "older work, or simply not indexed — not necessarily fabricated.")}
+ 
+    # 2. Score EVERY candidate on title + author + year together; keep the best.
+    #    Author/year agreement (not search rank) decides the winner — this is
+    #    what stops a same-titled lookalike from being chosen.
+    best = None
+    best_combined = -1
+    for work in results:
+        meta = _openalex_to_metadata(work)
+        cmp = compare_to_metadata(claimed_title, claimed_authors, claimed_year, meta)
+
+        # check how many authors match
+        overlap_count = int(cmp["author_overlap"].split("/")[0])
+        combined = cmp["title_score"] + (15 * overlap_count) + (10 if cmp["year_match"] else 0)
+        if combined > best_combined:
+            best_combined = combined
+            best = (work, cmp)
+ 
+    work, cmp = best
+ 
+    # 3. If the chosen paper carries a DOI, climb back onto the STRONG path.
+    doi = extract_doi_from_url(work.get("doi") or "")
+    if doi:
+        result = verify_doi(claimed_title, claimed_authors, claimed_year, doi)
+        result["evidence"] = "openalex search + doi confirmation"
+        result["note"] = "Found via title search, then confirmed against its DOI. " + result.get("note", "")
+        return result
+ 
+    # 4. No DOI on the chosen paper -> judge on the combined match, STRICTLY.
+    overlap_count = int(cmp["author_overlap"].split("/")[0])
+    if cmp["title_score"] >= TITLE_THRESHOLD and overlap_count > 0:
+        if cmp["year_match"] is False:
+            verdict = "verified_review"
+            note = "Found in OpenAlex; title and authors match, but the year differs — worth a manual look."
+        else:
+            verdict = "verified"
+            note = "Found in OpenAlex; title and authors match the citation."
+    elif cmp["title_score"] >= TITLE_THRESHOLD:
+        verdict = "unverifiable"
+        note = ("A work with this title exists in OpenAlex, but the authors do not match — "
+                "this may be a different paper that happens to share the title.")
+    else:
+        verdict = "unverifiable"
+        note = ("No close title match in OpenAlex. May be an unindexed book or older "
+                "work rather than a fabrication.")
+ 
+    return {
+        "verdict": verdict,
+        "evidence": "openalex search",
+        "title_score": cmp["title_score"],
+        "claimed_title": claimed_title,
+        "canonical_title": cmp["canonical_title"],
+        "author_overlap": cmp["author_overlap"],
+        "claimed_year": claimed_year,
+        "canonical_year": cmp["canonical_year"],
+        "note": note,
+    }
  
 def verify_doi(
     claimed_title: Optional[str],
@@ -418,28 +539,50 @@ def check_metadata(extracted_data):
         )
     elif extracted_data.get("url"):
         response = verify_url(
-            extracted_data.get("title"), 
-            extracted_data.get("authors"), 
-            extracted_data.get("year"), 
-            extracted_data.get("url")
+            extracted_data.get("title"),
+            extracted_data.get("authors"),
+            extracted_data.get("year"),
+            extracted_data.get("url"),
         )
-
+        # If the URL gave us nothing solid, fall back to the title/author/year search.
         if response.get("verdict") == "url_only":
-            # do the title and year check as well, not just checking alive or dead
-            pass
-
-
+            fallback = reverse_lookup(
+                extracted_data.get("title"),
+                extracted_data.get("authors"),
+                extracted_data.get("year"),
+            )
+            fallback["link_alive"] = response.get("link_alive")
+            fallback["url"] = extracted_data.get("url")
+            return fallback
         return response
-
     else:
-        return {
-            "verdict": "no_doi_or_url",
-            "note": "No DOI or URL found. Use title/author/year reverse lookup later."
-        }
-    
+        return reverse_lookup(
+            extracted_data.get("title"),
+            extracted_data.get("authors"),
+            extracted_data.get("year"),
+        )
 
 def metadata(reference):
     """Extracts the metadata using an llm and returns a reference in a specific format."""
     reference = re.sub(r"\s+", " ", reference).strip()
     result = chain.invoke({"reference": reference})
     return(result.model_dump())
+
+
+def check_reference(reference):
+    """Gives a verdict about a citation combining all the above functionality"""
+    return check_metadata(metadata(reference))
+
+
+if __name__ == "__main__":
+    import sys
+
+    # Read the reference from stdin (a pipe or a redirected file).
+    reference = sys.stdin.read().strip()
+
+    if not reference:
+        print('No reference provided. Use:  python reference_checking.py < reference.txt', file=sys.stderr)
+        sys.exit(1)
+
+    result = check_reference(reference)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

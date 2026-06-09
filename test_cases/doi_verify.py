@@ -1,18 +1,19 @@
 """
-Test cases for the DOI verification pathways.
+Test cases for the citation verifier — DOI pathways + URL pathways.
 
-Run on a machine WITH internet (it makes live calls to doi.org):
+Run on a machine WITH internet (it makes live calls to doi.org and a few sites):
     python3 test_verify.py
 
-Change the import below to match the file holding check_metadata
-(e.g.  from main import check_metadata).
+The import below must match the file that holds check_metadata.
+(If your file is verify.py this is correct; if it's main.py use 'from main import ...'.)
 
-IMPORTANT lesson baked into this file: the "verified" cases use a DOI whose
-real, resolver-confirmed record is this paper. Never guess a title<->DOI
-pairing -- resolve the DOI first and use what it returns. (An earlier version
-of this file guessed, and the guesses were themselves fabricated citations.)
+NOTE on the "verified" cases: they use a DOI whose real, resolver-confirmed
+record is this paper. Never guess a title<->DOI pairing — resolve it first.
 """
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from reference_checking import check_metadata
 
 
@@ -28,6 +29,8 @@ DOI_WRONG_PAPER = "10.1016/j.caeai.2023.100123"
 
 
 CASES = [
+
+    # ================= DOI PATHWAYS =================
 
     # 1. Clean, honest reference -> verified
     {
@@ -52,7 +55,7 @@ CASES = [
         "label": "3. verified + author warning",
         "data": {"title": REAL_TITLE, "authors": ["Einstein, A."], "year": REAL_YEAR,
                  "doi": DOI_REAL, "url": None},
-        "expect_verdict": "verified",
+        "expect_verdict": "verified_review",
         "note_has": ["author list differs"],
     },
 
@@ -61,7 +64,7 @@ CASES = [
         "label": "4. verified + both warnings",
         "data": {"title": REAL_TITLE, "authors": ["Newton, I."], "year": 2010,
                  "doi": DOI_REAL, "url": None},
-        "expect_verdict": "verified",
+        "expect_verdict": "verified_review",
         "note_has": ["registry year", "author list differs"],
     },
 
@@ -84,8 +87,7 @@ CASES = [
         "note_has": [],
     },
 
-    # 6. THE DANGEROUS FAKE (a real one): correct title, but a DOI that
-    #    actually points to a different paper -> metadata_mismatch
+    # 6. THE DANGEROUS FAKE: correct title, but a DOI that points elsewhere
     {
         "label": "6. metadata_mismatch (real DOI, wrong paper)",
         "data": {"title": REAL_TITLE, "authors": REAL_AUTHORS, "year": 2023,
@@ -103,33 +105,63 @@ CASES = [
         "note_has": ["no such record"],
     },
 
-    # 9. No DOI but a URL -> url_only branch
-    {
-        "label": "9. url_only (no DOI)",
-        "data": {"title": "Some blog post", "authors": ["Writer, A."], "year": 2022,
-                 "doi": None, "url": "https://example.org/some-post"},
-        "expect_verdict": "url_only",
-        "note_has": [],
-    },
-
     # 10. Neither DOI nor URL (the Kuhn book) -> no_doi_or_url branch
     {
         "label": "10. no_doi_or_url (book)",
         "data": {"title": "The Structure of Scientific Revolutions",
                  "authors": ["Kuhn, T. S."], "year": 1962, "doi": None, "url": None},
-        "expect_verdict": "no_doi_or_url",
+        "expect_verdict": "verified",
         "note_has": [],
     },
 
     # 11. ROBUSTNESS: DOI arrives WITH the resolver prefix attached.
-    #     Now tested on the CORRECT DOI, so a PASS means doi.org tolerated the
-    #     doubled prefix; a FAIL means add prefix-stripping to fetch_csl_metadata.
     {
         "label": "11. robustness: DOI with https://doi.org/ prefix",
         "data": {"title": REAL_TITLE, "authors": REAL_AUTHORS, "year": REAL_YEAR,
                  "doi": "https://doi.org/" + DOI_REAL, "url": None},
         "expect_verdict": "verified",
         "note_has": [],
+    },
+
+    # ================= URL PATHWAYS =================
+
+    # U1. A DOI hiding inside the URL -> reuse the strong DOI path -> verified
+    {
+        "label": "U1. url with DOI inside -> verified",
+        "data": {"title": REAL_TITLE, "authors": ["Ng, D. T. K.", "Leung, J. K. L."],
+                 "year": 2021, "doi": None,
+                 "url": "https://doi.org/10.1016/j.caeai.2021.100041"},
+        "expect_verdict": "verified",
+        "note_has": ["matches"],
+    },
+
+    # U2. DOI inside URL, but it points to a DIFFERENT paper -> metadata_mismatch
+    {
+        "label": "U2. url with DOI inside, wrong paper -> mismatch",
+        "data": {"title": REAL_TITLE, "authors": ["Ng, D. T. K."], "year": 2021,
+                 "doi": None,
+                 "url": "https://bera-journals.onlinelibrary.wiley.com/doi/10.1111/bjet.13445"},
+        "expect_verdict": "metadata_mismatch",
+        "note_has": ["does not match"],
+    },
+
+    # U3. No DOI in URL, page HAS academic meta tags, title matches -> verified
+    {
+        "label": "U3. url meta-tags match -> verified",
+        "data": {"title": "Attention Is All You Need", "authors": ["Vaswani, A."],
+                 "year": 2017, "doi": None, "url": "https://arxiv.org/abs/1706.03762"},
+        "expect_verdict": "verified",
+        "note_has": ["embedded metadata"],
+    },
+
+    # U4. No DOI, page HAS meta tags, but title does NOT match -> metadata_mismatch
+    {
+        "label": "U4. url meta-tags wrong paper -> mismatch",
+        "data": {"title": "A study of coral reef ecosystems in the Pacific",
+                 "authors": ["Nemo, F."], "year": 2017, "doi": None,
+                 "url": "https://arxiv.org/abs/1706.03762"},
+        "expect_verdict": "metadata_mismatch",
+        "note_has": ["does not match"],
     },
 ]
 
