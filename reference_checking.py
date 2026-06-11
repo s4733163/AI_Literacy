@@ -371,7 +371,7 @@ def reverse_lookup(claimed_title, claimed_authors, claimed_year, max_candidates=
  
     # 3. If the chosen paper carries a DOI, climb back onto the STRONG path.
     doi = extract_doi_from_url(work.get("doi") or "")
-    if doi:
+    if doi and cmp["title_score"] >= TITLE_THRESHOLD:
         result = verify_doi(claimed_title, claimed_authors, claimed_year, doi)
         result["evidence"] = "openalex search + doi confirmation"
         result["note"] = "Found via title search, then confirmed against its DOI. " + result.get("note", "")
