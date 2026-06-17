@@ -36,3 +36,21 @@ class Reference(BaseModel):
         default=None,
         description="Web URL associated with the source if provided in the reference."
     )
+
+
+class IdentifiedReference(BaseModel):
+    entry_id: str
+    reference: Reference
+
+"""
+{items: [
+    {
+    entry_id: 123
+        reference: {
+        raw_reference, title, year, authors .....
+        }
+    }
+]}
+"""
+class BatchExtraction(BaseModel):
+    items: list[IdentifiedReference]

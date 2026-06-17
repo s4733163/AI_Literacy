@@ -2,3 +2,5 @@ venv
 .env__pycache__/
 *.pyc
 .env
+*.csv
+*.xlsx
