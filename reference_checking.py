@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from structured import Reference, BatchExtraction
+from structured import Reference
 from pydantic import BaseModel
 from rapidfuzz import fuzz
 from typing import Optional
@@ -10,9 +10,6 @@ import requests
 import os
 import json
 from bs4 import BeautifulSoup
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-import pandas as pd
 
 
 load_dotenv()
@@ -24,6 +21,7 @@ DOI_RESOLVER = "https://doi.org/"
 HEADERS = {
     "Accept": "application/vnd.citationstyles.csl+json"
 }
+
 
 # A title fuzzy-score at or above this counts as a match. 85 sits in the
 # conventional 80-90 band: high enough to reject a different paper, loose
@@ -47,6 +45,7 @@ _META_DATE   = ["citation_publication_date", "citation_date", "citation_cover_da
 # faster, more reliable "polite pool".
 OPENALEX_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = "vsvarun@utas.edu.au"
+
 
 # check if the api key exists
 if not os.getenv("GOOGLE_API_KEY"):
@@ -106,7 +105,13 @@ chain = prompt | structured_llm
 # Verification (doi.org / OpenAlex) is NOT batched — those are not the LLM and
 # are run per-entry afterwards.
 # ---------------------------------------------------------------------------
+class IdentifiedReference(BaseModel):
+    entry_id: str
+    reference: Reference
 
+
+class BatchExtraction(BaseModel):
+    items: list[IdentifiedReference]
 
 
 batch_structured_llm = llm.with_structured_output(BatchExtraction)
@@ -410,11 +415,16 @@ def reverse_lookup(claimed_title, claimed_authors, claimed_year, max_candidates=
                 "note": "No title available to search with — cannot look this up."}
 
     # 1. Search OpenAlex by title.
+    #    OpenAlex treats commas as separators BETWEEN filters, so a comma inside
+    #    the title (e.g. "X, Y and Z") breaks the title.search filter and returns
+    #    a 400. Strip characters that are special in filter syntax; title.search
+    #    is fuzzy and we re-score the result ourselves, so this costs no accuracy.
+    safe_title = re.sub(r"[,:|]+", " ", claimed_title)
+    safe_title = re.sub(r"\s+", " ", safe_title).strip()
     try:
         resp = requests.get(
             OPENALEX_URL,
-            params={"search": claimed_title,
-                    "filter": "title.search:" + claimed_title,
+            params={"filter": "title.search:" + safe_title,
                     "per-page": max_candidates,
                     "mailto": OPENALEX_MAILTO},
             timeout=15,
@@ -527,7 +537,7 @@ def extract_doi_from_url(url):
     """
     if not url:
         return None
-    
+
     # find the DOI in the url if exists
     match = DOI_PATTERN.search(url)
     if not match:
@@ -695,7 +705,8 @@ def _find_named_column(df, names):
 
 def _format_results(path):
     """Bold the header, colour the verdict cells, set widths, wrap the note."""
-
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
 
     wb = load_workbook(path)
     ws = wb.active
@@ -728,13 +739,14 @@ def check_excel_batch(input_path, output_path=None, batch_size=BATCH_SIZE):
     """Read an Excel with 'Entry id' and 'Entry name' columns, extract metadata
     in batched LLM calls, verify each entry, and write a colour-coded sheet.
     Returns (output_path, summary_counts)."""
+    import pandas as pd
 
-
+    # Accept either a CSV or an Excel file; pandas reads both, only the
+    # reader differs. The results are still written as a colour-coded .xlsx.
     if input_path.lower().endswith(".csv"):
         df = pd.read_csv(input_path)
     else:
         df = pd.read_excel(input_path)
-        
     id_col = _find_named_column(df, ("entry id", "entry_id", "id"))
     name_col = _find_named_column(df, ("entry name", "entry_name", "reference", "citation", "name"))
     if name_col is None:
@@ -766,8 +778,6 @@ def check_excel_batch(input_path, output_path=None, batch_size=BATCH_SIZE):
                 r = check_metadata(md)
             except Exception as exc:
                 r = {"verdict": "error", "note": f"Verification failed: {exc}"}
-
-        # apennd the result of the verification
         rows.append({
             "entry_id": eid,
             "entry_name": txt,
