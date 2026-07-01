@@ -30,8 +30,15 @@ USAGE
 """
 import argparse, csv, json, random, re, sys, time
 from urllib.parse import quote
+import requests
+from dotenv import load_dotenv
+import os
 
-OPENALEX = "https://api.openalex.org/works"
+load_dotenv()
+
+
+
+OPENALEX = f"https://api.openalex.org/works?api_key={os.getenv("OPEN_ALEX_KEY")}"
 MAILTO = "vsvarun@utas.edu.au"
 
 # Topics to spread the real sample across domains (mirrors GhostCite / CiteAudit
@@ -41,6 +48,53 @@ TOPICS = [
     "molecular biology", "civil engineering", "linguistics", "public health",
     "astrophysics", "criminology", "marine biology", "educational technology",
     "renewable energy", "neuroscience",
+]
+
+# ---------------------------------------------------------------------------
+# Genuine URL-tier seeds. OpenAlex landing_page_url is almost always a doi.org
+# link (which the tool correctly strips back to the DOI stage), so it cannot
+# supply true URL references. arXiv /abs/ pages are the reliable alternative:
+# permanently live, they carry citation_* meta tags the tool reads, and their
+# URLs contain NO DOI pattern (10.dddd/...), so they cannot fall back to DOI.
+# These twelve are extremely stable, well-known papers.
+# ---------------------------------------------------------------------------
+URL_SEEDS = [
+    {"title": "Attention Is All You Need",
+     "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar"], "year": 2017,
+     "url": "https://arxiv.org/abs/1706.03762"},
+    {"title": "Deep Residual Learning for Image Recognition",
+     "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren"], "year": 2015,
+     "url": "https://arxiv.org/abs/1512.03385"},
+    {"title": "Very Deep Convolutional Networks for Large-Scale Image Recognition",
+     "authors": ["Karen Simonyan", "Andrew Zisserman"], "year": 2014,
+     "url": "https://arxiv.org/abs/1409.1556"},
+    {"title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
+     "authors": ["Sergey Ioffe", "Christian Szegedy"], "year": 2015,
+     "url": "https://arxiv.org/abs/1502.03167"},
+    {"title": "Generative Adversarial Networks",
+     "authors": ["Ian Goodfellow", "Jean Pouget-Abadie", "Mehdi Mirza"], "year": 2014,
+     "url": "https://arxiv.org/abs/1406.2661"},
+    {"title": "Adam: A Method for Stochastic Optimization",
+     "authors": ["Diederik Kingma", "Jimmy Ba"], "year": 2014,
+     "url": "https://arxiv.org/abs/1412.6980"},
+    {"title": "You Only Look Once: Unified, Real-Time Object Detection",
+     "authors": ["Joseph Redmon", "Santosh Divvala", "Ross Girshick"], "year": 2015,
+     "url": "https://arxiv.org/abs/1506.02640"},
+    {"title": "U-Net: Convolutional Networks for Biomedical Image Segmentation",
+     "authors": ["Olaf Ronneberger", "Philipp Fischer", "Thomas Brox"], "year": 2015,
+     "url": "https://arxiv.org/abs/1505.04597"},
+    {"title": "Efficient Estimation of Word Representations in Vector Space",
+     "authors": ["Tomas Mikolov", "Kai Chen", "Greg Corrado"], "year": 2013,
+     "url": "https://arxiv.org/abs/1301.3781"},
+    {"title": "Densely Connected Convolutional Networks",
+     "authors": ["Gao Huang", "Zhuang Liu", "Laurens van der Maaten"], "year": 2016,
+     "url": "https://arxiv.org/abs/1608.06993"},
+    {"title": "Rethinking the Inception Architecture for Computer Vision",
+     "authors": ["Christian Szegedy", "Vincent Vanhoucke", "Sergey Ioffe"], "year": 2015,
+     "url": "https://arxiv.org/abs/1512.00567"},
+    {"title": "Distilling the Knowledge in a Neural Network",
+     "authors": ["Geoffrey Hinton", "Oriol Vinyals", "Jeff Dean"], "year": 2015,
+     "url": "https://arxiv.org/abs/1503.02531"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -89,7 +143,6 @@ def _clean_doi(doi):
 
 def harvest_real(n, seed=7):
     """Pull n real works from OpenAlex, spread across topics. Needs network."""
-    import requests
     random.seed(seed)
     per = max(4, n // len(TOPICS) + 2)
     pool, seen = [], set()
@@ -222,22 +275,50 @@ def make_fake(kind, seed, other):
         return make_reference(m, include_doi=False), kind, "reverse", "unverifiable"
     raise ValueError(kind)
 
-# ---------------------------------------------------------------------------
-# Assemble
-# ---------------------------------------------------------------------------
-def construct_dataset(pool, n_real, n_fake, seed=7):
+# URL-branch fakes, built from genuine URL seeds so the URL verifier is
+# exercised on bad input too (a real page cited wrongly, and a dead link).
+URL_FAKE_TYPES = ["url_metadata_mismatch", "url_dead"]
+
+def make_url_fake(kind, useed, other):
+    """Return (reference_string, error_type, expected_tier, expected_verdict)."""
+    if kind == "url_metadata_mismatch":
+        # Cite a REAL arXiv page, but with a DIFFERENT paper's title/authors.
+        # The tool reads the page's real metatags -> title disagrees -> mismatch,
+        # resolved at the URL tier (evidence = "page meta tags").
+        m = {"title": other["title"], "authors": other["authors"],
+             "year": other.get("year"), "venue": "arXiv",
+             "url": useed["url"], "doi": None}
+        return make_reference(m, include_doi=False, include_url=True), \
+            kind, "url", "metadata_mismatch"
+    if kind == "url_dead":
+        # A fabricated reference whose only locator is a dead link. The URL
+        # verifier tries meta tags (fetch fails) then the liveness check
+        # (unreachable), so it falls through to reverse lookup -> unverifiable.
+        n = random.randint(10000, 99999)
+        m = {"title": fake_title(useed["title"]) + " revisited",
+             "authors": random_authors(2), "year": random.randint(2016, 2026),
+             "venue": "Preprint", "doi": None,
+             "url": f"https://papers.example.invalid/doc/{n}"}
+        return make_reference(m, include_doi=False, include_url=True), \
+            kind, "reverse", "unverifiable"
+    raise ValueError(kind)
+
+def construct_dataset(pool, n_real, n_fake, seed=7, n_url_fake=8):
     random.seed(seed)
     pool = list(pool)
     reals = pool[:n_real]
     seeds_for_fakes = pool[n_real:n_real + n_fake + 5]
     rows = []
     eid = 1
-    # reals: mostly DOI tier; a slice without DOI (reverse tier); a slice URL-only
+    url_i = 0                                    # cursor into URL_SEEDS
+    # reals: mostly DOI tier; a slice via genuine URL (arXiv); a slice via reverse
     for i, m in enumerate(reals):
         r = dict(m)
         mod = i % 10
-        if mod == 8 and m.get("url"):          # URL branch (no explicit DOI field)
-            ref = make_reference(r, include_doi=False, include_url=True)
+        if mod == 8:                            # GENUINE URL tier: real arXiv page,
+            us = URL_SEEDS[url_i % len(URL_SEEDS)]; url_i += 1   # no DOI, no doi.org URL
+            ref = make_reference({**us, "doi": None, "venue": "arXiv"},
+                                 include_doi=False, include_url=True)
             tier, exp = "url", "verified"
         elif mod == 9:                          # no DOI, no URL -> reverse lookup
             ref = make_reference(r, include_doi=False, include_url=False)
@@ -253,6 +334,13 @@ def construct_dataset(pool, n_real, n_fake, seed=7):
         other = seeds_for_fakes[(j + 3) % len(seeds_for_fakes)]
         ref, etype, tier, exp = make_fake(kind, seed_m, other)
         rows.append([eid, ref, "fake", etype, tier, exp]); eid += 1
+    # URL-branch fakes (added so the URL verifier is evaluated on bad input too)
+    for j in range(n_url_fake):
+        kind = URL_FAKE_TYPES[j % len(URL_FAKE_TYPES)]
+        useed = URL_SEEDS[j % len(URL_SEEDS)]
+        other = URL_SEEDS[(j + 4) % len(URL_SEEDS)]
+        ref, etype, tier, exp = make_url_fake(kind, useed, other)
+        rows.append([eid, ref, "fake", etype, tier, exp]); eid += 1
     random.shuffle(rows)
     for new_id, row in enumerate(rows, 1):     # renumber after shuffle
         row[0] = new_id
@@ -262,6 +350,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n-real", type=int, default=105)
     ap.add_argument("--n-fake", type=int, default=45)
+    ap.add_argument("--n-url-fake", type=int, default=8,
+                    help="URL-branch fakes injected from arXiv seeds (dead/mismatch)")
     ap.add_argument("--out", default="benchmark_dataset.csv")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--mock", action="store_true", help="offline synthetic registry")
@@ -276,7 +366,7 @@ def main():
         if not pool:
             sys.exit(1)
 
-    rows = construct_dataset(pool, args.n_real, args.n_fake, args.seed)
+    rows = construct_dataset(pool, args.n_real, args.n_fake, args.seed, args.n_url_fake)
     header = ["Entry id", "Entry name", "label", "error_type",
               "expected_tier", "expected_verdict"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:

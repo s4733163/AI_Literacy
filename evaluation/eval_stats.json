@@ -1,0 +1,231 @@
+{
+  "composition": {
+    "n": 158,
+    "real": 105,
+    "fake": 53,
+    "by_error_type": {
+      "none": 105,
+      "fabricated_nodoi": 6,
+      "wrong_authors": 7,
+      "url_dead": 4,
+      "fabricated_fakedoi": 6,
+      "metadata_mismatch": 7,
+      "fabricated_doi": 7,
+      "wrong_year": 6,
+      "url_metadata_mismatch": 4,
+      "lookalike_title": 6
+    },
+    "bucket_distribution": {
+      "ACCEPT": 103,
+      "ABSTAIN": 16,
+      "REVIEW": 13,
+      "REJECT": 26
+    },
+    "verdict_distribution": {
+      "verified": 103,
+      "unverifiable": 16,
+      "verified_review": 13,
+      "doi_not_found": 15,
+      "metadata_mismatch": 11
+    }
+  },
+  "rq1_hierarchy": {
+    "by_strategy": {
+      "DOI-only": {
+        "resolution_rate": 0.7468,
+        "resolved_n": 118,
+        "unresolved_n": 40,
+        "false_accusation_rate": 0.019,
+        "false_accusation_n": 2
+      },
+      "DOI+URL": {
+        "resolution_rate": 0.8354,
+        "resolved_n": 132,
+        "unresolved_n": 26,
+        "false_accusation_rate": 0.019,
+        "false_accusation_n": 2
+      },
+      "Full (DOI+URL+rev)": {
+        "resolution_rate": 0.8987,
+        "resolved_n": 142,
+        "unresolved_n": 16,
+        "false_accusation_rate": 0.019,
+        "false_accusation_n": 2
+      }
+    },
+    "full_minus_doi_only": 0.1519,
+    "N": 158
+  },
+  "rq2_coverage": {
+    "verified_n": 116,
+    "by_tier_n": {
+      "doi": 96,
+      "reverse": 10,
+      "url": 10
+    },
+    "by_tier_pct": {
+      "doi": 0.8276,
+      "reverse": 0.0862,
+      "url": 0.0862
+    },
+    "all_checked_by_tier_n": {
+      "doi": 134,
+      "reverse": 10,
+      "url": 14
+    }
+  },
+  "rq3_errors": {
+    "matrix": {
+      "fabricated_doi": {
+        "doi_not_found": 7,
+        "metadata_mismatch": 0,
+        "unverifiable": 0,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "fabricated_fakedoi": {
+        "doi_not_found": 6,
+        "metadata_mismatch": 0,
+        "unverifiable": 0,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "fabricated_nodoi": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 0,
+        "unverifiable": 6,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "lookalike_title": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 0,
+        "unverifiable": 6,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "metadata_mismatch": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 7,
+        "unverifiable": 0,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "none": {
+        "doi_not_found": 2,
+        "metadata_mismatch": 0,
+        "unverifiable": 0,
+        "verified": 98,
+        "verified_review": 5
+      },
+      "url_dead": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 0,
+        "unverifiable": 4,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "url_metadata_mismatch": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 4,
+        "unverifiable": 0,
+        "verified": 0,
+        "verified_review": 0
+      },
+      "wrong_authors": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 0,
+        "unverifiable": 0,
+        "verified": 0,
+        "verified_review": 7
+      },
+      "wrong_year": {
+        "doi_not_found": 0,
+        "metadata_mismatch": 0,
+        "unverifiable": 0,
+        "verified": 5,
+        "verified_review": 1
+      }
+    },
+    "per_error_accuracy": {
+      "fabricated_doi": {
+        "n": 7,
+        "as_expected": 7,
+        "rate": 1.0
+      },
+      "fabricated_fakedoi": {
+        "n": 6,
+        "as_expected": 6,
+        "rate": 1.0
+      },
+      "fabricated_nodoi": {
+        "n": 6,
+        "as_expected": 6,
+        "rate": 1.0
+      },
+      "lookalike_title": {
+        "n": 6,
+        "as_expected": 6,
+        "rate": 1.0
+      },
+      "metadata_mismatch": {
+        "n": 7,
+        "as_expected": 7,
+        "rate": 1.0
+      },
+      "none": {
+        "n": 105,
+        "as_expected": 98,
+        "rate": 0.9333
+      },
+      "url_dead": {
+        "n": 4,
+        "as_expected": 4,
+        "rate": 1.0
+      },
+      "url_metadata_mismatch": {
+        "n": 4,
+        "as_expected": 4,
+        "rate": 1.0
+      },
+      "wrong_authors": {
+        "n": 7,
+        "as_expected": 7,
+        "rate": 1.0
+      },
+      "wrong_year": {
+        "n": 6,
+        "as_expected": 5,
+        "rate": 0.8333
+      }
+    },
+    "overall_expected_match": 0.9494,
+    "verdict_order": [
+      "doi_not_found",
+      "metadata_mismatch",
+      "unverifiable",
+      "verified",
+      "verified_review"
+    ]
+  },
+  "rq4_queries": {
+    "N": 158,
+    "resolved_at_doi_tier_n": 134,
+    "openalex_queries_doi_first": 10,
+    "openalex_queries_retrieval_first": 158,
+    "query_reduction_rate": 0.9367,
+    "queries_saved": 148
+  },
+  "rq5_cost_estimate": {
+    "assumptions_seconds_per_call": {
+      "doi": 0.6,
+      "url": 1.2,
+      "openalex": 0.9
+    },
+    "est_time_doi_first_s": 112.2,
+    "est_time_retrieval_first_s": 222.6,
+    "est_time_saved_s": 110.4,
+    "est_pct_faster": 0.496,
+    "note": "Latency-model estimate; run_timing.py yields measured wall-clock."
+  }
+}

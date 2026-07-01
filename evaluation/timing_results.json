@@ -1,0 +1,22 @@
+{
+  "n": 20,
+  "doi_first": {
+    "wall_s": 23.31,
+    "calls": {
+      "doi": 17,
+      "openalex": 6,
+      "url": 2
+    }
+  },
+  "retrieval_first": {
+    "wall_s": 46.36,
+    "calls": {
+      "doi": 29,
+      "openalex": 20,
+      "url": 0
+    }
+  },
+  "time_saved_s": 23.05,
+  "pct_faster": 0.4972,
+  "openalex_queries_saved": 14
+}
